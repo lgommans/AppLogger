@@ -29,6 +29,7 @@
         private void InitializeComponent()
         {
             this.components = new System.ComponentModel.Container();
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(applogger));
             this.button_toggle_start = new System.Windows.Forms.Button();
             this.button_open_log = new System.Windows.Forms.Button();
             this.timer_logger = new System.Windows.Forms.Timer(this.components);
@@ -93,6 +94,7 @@
             this.Controls.Add(this.label_status);
             this.Controls.Add(this.button_open_log);
             this.Controls.Add(this.button_toggle_start);
+            this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
             this.Name = "applogger";
             this.Text = "Window Logger";
             this.Resize += new System.EventHandler(this.applogger_Resize);
