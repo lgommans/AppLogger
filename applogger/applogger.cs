@@ -4,6 +4,8 @@
  * License: MIT (see the file named `LICENSE`)
  * 
  * Todo: make stuff configurable (logging and saving interval, window filter, storage directory, language; etc.); proper command line argument parsing.
+ * 
+ * Application icon from: http://www.fatcow.com/free-icons
  */
 
 using System;
@@ -25,11 +27,11 @@ namespace applogger
     {
         private bool logging;
         private string applicationStartTime;
-        private string applicationStartDay;
         private Dictionary<string, WindowData> runningProgramData;
         private List<WindowData> closedProgramData;
         private NotifyIcon notifyIcon;
         private Dictionary<string, string> translations;
+        private string lastFilename;
 
         public applogger()
         {
@@ -39,9 +41,9 @@ namespace applogger
             timer_saver.Interval = 1000 * 60 * 5;
             translations = Translations.getTranslations("nl");
             applicationStartTime = DateTime.Now.ToString("HH-mm").Replace("-", translations["hour symbol"]);
-            applicationStartDay = DateTime.Now.ToString("yyyy-MM-dd");
             runningProgramData = new Dictionary<string, WindowData>();
             closedProgramData = new List<WindowData>();
+            lastFilename = getFilename();
 
             if (!Directory.Exists(getFolder()))
             {
@@ -51,27 +53,49 @@ namespace applogger
             notifyIcon = new NotifyIcon();
             notifyIcon.Icon = this.Icon;
             notifyIcon.Click += notifyIcon_Click;
+            notifyIcon.BalloonTipClicked += notifyIcon_Click;
+
+            string[] args = Environment.GetCommandLineArgs();
+            if (args.Length > 1 && args[1] == "bg")
+            {
+                this.WindowState = FormWindowState.Minimized;
+                startLogging();
+                this.ShowInTaskbar = false;
+            }
+        }
+
+        private void stopLogging()
+        {
+            timer_logger.Stop();
+            timer_saver.Stop();
+            button_toggle_start.Text = translations["btn start logging"];
+            button_open_log.Enabled = true;
+            saveLog();
+            label_status.Text = translations["status: idle"];
+            logging = false;
+        }
+
+        private void startLogging()
+        {
+            timer_logger.Start();
+            timer_saver.Start();
+            label_status.Text = translations["status: starting..."];
+            button_toggle_start.Text = translations["btn stop logging"];
+            button_open_log.Enabled = false;
+            log();
+            logging = true;
         }
 
         private void button_toggle_start_Click(object sender, EventArgs e)
         {
             if (logging)
             {
-                timer_logger.Stop();
-                button_toggle_start.Text = translations["btn start logging"];
-                button_open_log.Enabled = true;
-                timer_saver_Tick(null, null);
-                label_status.Text = translations["status: idle"];
+                stopLogging();
             }
             else
             {
-                timer_logger.Start();
-                label_status.Text = translations["status: starting..."];
-                button_toggle_start.Text = translations["btn stop logging"];
-                button_open_log.Enabled = false;
-                log();
+                startLogging();
             }
-            logging = !logging;
         }
 
         private bool filter(string windowName)
@@ -93,40 +117,46 @@ namespace applogger
 
         private void log()
         {
-            string currentDay = DateTime.Now.ToString("yyyy-MM-dd");
-            if (applicationStartDay != currentDay)
+            if (getFilename() != lastFilename)
             {
+                // If the filename changes, the current closed programs is longer relevant because it has been written to yesterday's log.
+                lastFilename = getFilename();
                 closedProgramData.Clear();
             }
 
+            // Set each program's status to not open...
             foreach (KeyValuePair<string, WindowData> kvp in runningProgramData)
             {
                 kvp.Value.stillOpen = false;
             }
 
+            // ...then check which ones are still open.
             foreach (KeyValuePair<IntPtr, string> window in OpenWindowGetter.GetOpenWindows())
             {
                 if (!filter(window.Value))
                 {
+                    // We only care about certain windows; ignore the others completely
                     continue;
                 }
 
                 if (!runningProgramData.ContainsKey(window.Value))
                 {
+                    // a new window appeared! Keep track of this.
                     WindowData windowData = new WindowData(window.Value);
                     windowData.stillOpen = true;
                     runningProgramData.Add(window.Value, windowData);
                 }
                 else
                 {
+                    // We already knew this window, so just mark it as "still open".
                     runningProgramData[window.Value].stillOpen = true;
                 }
 
                 runningProgramData[window.Value].runningTime++;
             }
 
+            // Create a list of each window we can remove...
             List<string> closedPrograms = new List<string>();
-
             foreach (KeyValuePair<string, WindowData> kvp in runningProgramData)
             {
                 if (kvp.Value.stillOpen == false)
@@ -136,11 +166,13 @@ namespace applogger
                 }
             }
 
+            // ... and remove them.
             foreach (string closedProgram in closedPrograms)
             {
                 runningProgramData.Remove(closedProgram);
             }
 
+            // Update the status field (filename may have changed).
             string filename = getFilename();
             label_status.Text = translations["status: logging to "] + getFilename();
         }
@@ -184,6 +216,9 @@ namespace applogger
 
         private string ticksToTime(int ticks)
         {
+            // Programs contain an int for their "open time", which is increased by 1 every time the program is seen.
+            // Thus, the program's open time is (opentime * tick_interval).
+            // This method converts the number of ticks to a "hh:mm" format (e.g. 01:03 for 1 hour and 3 minutes).
             int milliseconds = ticks * timer_logger.Interval;
             double seconds = milliseconds / 1000.0;
             double minutes = seconds / 60.0;
@@ -202,8 +237,9 @@ namespace applogger
             return strHours + ":" + strMinutes;
         }
 
-        private void timer_saver_Tick(object sender, EventArgs e)
+        private void saveLog()
         {
+            // Build a string with the data we want to write.
             string data = translations["log saved at "] + DateTime.Now.ToString("HH:mm") + "\r\n";
             data += translations["column info"] + "\r\n";
             foreach (WindowData window in closedProgramData)
@@ -215,6 +251,8 @@ namespace applogger
                 data += kvp.Value.starttime.ToString("HH:mm") + "   " + ticksToTime(kvp.Value.runningTime) + "*  " + kvp.Key + "\r\n";
             }
             data += "* " + translations["incomplete time; app still open"];
+
+            // Data string complete, write it!
             try
             {
                 File.WriteAllText(getFilename(), data);
@@ -223,6 +261,11 @@ namespace applogger
             {
                 alert(translations["error writing log"]);
             }
+        }
+
+        private void timer_saver_Tick(object sender, EventArgs e)
+        {
+            saveLog();
         }
 
         private void alert(string message, string title = "Error")
@@ -239,16 +282,24 @@ namespace applogger
         {
             if (FormWindowState.Minimized == this.WindowState)
             {
+                // Hide to tray upon minimizing
                 notifyIcon.Visible = true;
                 notifyIcon.ShowBalloonTip(500, translations["program name"] + " " + translations["active"], translations["click to open"], ToolTipIcon.Info);
                 this.Hide();
             }
         }
 
-        private void notifyIcon_Click(object sender, EventArgs e)
+        private void showOurselves()
         {
+            // Tray icon was clicked! Hide the tray icon and show the form.
             notifyIcon.Visible = false;
             this.Show();
+            this.ShowInTaskbar = true;
+        }
+
+        private void notifyIcon_Click(object sender, EventArgs e)
+        {
+            showOurselves();
         }
     }
 }
